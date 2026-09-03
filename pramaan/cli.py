@@ -229,13 +229,26 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(f"wrote {out}", file=sys.stderr)
         return EXIT_OK
 
-    def _load(path: str | None) -> Any:
-        return json.loads(Path(path).read_text(encoding="utf-8")) if path else None
+    from pramaan.schemas import Finding
 
+    findings = []
+    if args.findings:
+        findings = [
+            Finding.from_dict(json.loads(line))
+            for line in Path(args.findings).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    # `render` re-scans its own output against the disclosure ledger and raises rather
+    # than returning a document, so a leak fails the command instead of producing an
+    # artifact somebody publishes.
     html = trust_report.render(
-        suite=_load(args.suite),
-        injection=_load(args.injection),
-        ablation=_load(args.ablation),
+        trust_report.ReportInputs(
+            findings=findings,
+            run_epoch=args.run_epoch or "",
+            commit_sha=args.commit_sha or "",
+            corpus_labelled=args.corpus_labelled,
+        )
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -321,9 +334,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="trust report and risk summary")
     rsub = p.add_subparsers(dest="report_command", required=True)
     q = rsub.add_parser("render", help="render the trust report to HTML")
+    q.add_argument("--findings", help="corpus JSONL; aggregate-only per the disclosure policy")
     q.add_argument("--suite")
     q.add_argument("--injection")
     q.add_argument("--ablation", help="optional: renders without it if absent")
+    q.add_argument("--run-epoch", default="")
+    q.add_argument("--commit-sha", default="")
+    # Defaults to False: claiming a labelled corpus when it is not is the one error
+    # here that silently makes every published number look real.
+    q.add_argument("--corpus-labelled", action="store_true")
     q.add_argument("--out", required=True)
     q = rsub.add_parser("summary", help="weekly risk summary with SLA clocks")
     q.add_argument("--out", required=True)

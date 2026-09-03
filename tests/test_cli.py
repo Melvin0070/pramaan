@@ -109,3 +109,41 @@ def test_cli_runs_as_a_module_without_the_package_installed() -> None:
     assert result.returncode == 0
     for command in [*OFFLINE, "evals", "report", "prove"]:
         assert command in result.stdout
+
+
+@pytest.mark.skipif(not CORPUS.exists(), reason="corpus not present")
+def test_report_render_produces_a_leak_free_page_from_the_real_corpus(tmp_path: Path) -> None:
+    """This path drifted once already.
+
+    `cmd_report` was calling `render(suite=..., injection=..., ablation=...)` while the
+    real signature takes a single `ReportInputs`. Every unit test on both sides passed,
+    because nothing exercised the seam between them. So this test runs the actual CLI
+    over the actual 121-finding corpus and checks the actual output.
+    """
+    import json as _json
+
+    out = tmp_path / "trust-report.html"
+    assert main([
+        "report", "render", "--findings", str(CORPUS), "--out", str(out),
+    ]) == EXIT_OK
+
+    html = out.read_text(encoding="utf-8")
+    lowered = html.lower()
+
+    findings = [_json.loads(line) for line in CORPUS.read_text(encoding="utf-8").splitlines() if line.strip()]
+    for finding in findings:
+        assert finding["path"].lower() not in lowered, f"leaked path for {finding['repo']}"
+        assert finding["finding_id"].lower() not in lowered
+
+    # ...and it must still be a report. A leak check passes trivially on a blank page.
+    assert "<svg" in html
+    assert "121" in html
+    assert "will not print" in lowered, "the refusals section is the honesty mechanism"
+
+
+def test_report_render_defaults_to_treating_the_corpus_as_unlabelled(tmp_path: Path) -> None:
+    """Claiming a labelled corpus when it is not is the one error here that silently
+    makes every published number look real, so it must be opt-in."""
+    parser = build_parser()
+    args = parser.parse_args(["report", "render", "--out", "x.html"])
+    assert args.corpus_labelled is False

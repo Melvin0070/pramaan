@@ -121,3 +121,17 @@ cycle it replaced.
 
 The lesson is about the shape of the test suite, not the code: a green suite proved the
 units worked and said nothing about whether the package could be used.
+
+**2026-09-03 — I wrote a CLI against an API that did not exist yet.**
+`pramaan report render` called `trust_report.render(suite=..., injection=..., ablation=...)`
+because I wrote the CLI while the report lane was still building, and guessed the
+signature. The real one takes a single `ReportInputs` dataclass. Both sides were fully
+unit-tested and both suites were green; nothing exercised the seam between them, and my
+own CLI tests had skipped the one command whose dependency was still in flight — which
+is precisely the command that needed the test. Caught by rendering the report by hand
+rather than by any test.
+
+Third integration failure of the day, same shape every time: the lanes were right and
+the joins were wrong. The fix is a test that runs the real CLI over the real 121-finding
+corpus and greps the real output, which is slower than a unit test and is the only kind
+that would have caught this.
