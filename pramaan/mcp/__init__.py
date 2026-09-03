@@ -42,7 +42,20 @@ from pramaan.mcp.github_tools import (
 )
 from pramaan.mcp.killswitch import KILLSWITCH_ENV_VAR, is_engaged, make_killswitch_hook, raise_if_engaged
 from pramaan.mcp.records import InMemoryRecordStore, JsonFileRecordStore, RecordStore
-from pramaan.mcp.shadow import LIVE, SHADOW, Actuator, ActuatorMode, ShadowAction, ShadowRecorder
+# Deferred deliberately: pramaan.mcp.shadow imports pramaan.tickets.adapter, which imports back into
+# pramaan.mcp -- an eager shadow import here makes `import pramaan.tickets` circular.
+# PEP 562 keeps the package surface identical while breaking the import cycle.
+_LAZY_SHADOW = ['Actuator', 'ActuatorMode', 'LIVE', 'SHADOW', 'ShadowAction', 'ShadowRecorder']
+
+
+def __getattr__(name: str):
+    if name in _LAZY_SHADOW:
+        import importlib
+
+        return getattr(importlib.import_module("pramaan.mcp.shadow"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 
 __all__ = [
     "CLOSING_FIELDS", "DojoApiError", "DojoClient", "RestDojoClient",

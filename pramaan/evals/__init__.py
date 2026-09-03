@@ -75,17 +75,21 @@ from pramaan.evals.metrics import (
     fp_class_metrics_per_corpus,
 )
 from pramaan.evals.payloads import CANARY, CHANNELS, PAYLOADS, Channel, Payload
-from pramaan.evals.runner import (
-    CorpusReport,
-    EpochLeakError,
-    GateResult,
-    StaleEpochError,
-    SuiteResult,
-    ci_suite,
-    evaluate_gates,
-    nightly_suite,
-    stratified_subset,
-)
+# Deferred deliberately: pramaan.evals.runner imports pramaan.calibration.tau, which imports
+# pramaan.evals.labels -- importing that submodule runs THIS file first, so an
+# eager runner import here makes `import pramaan.calibration` a circular import.
+# PEP 562 keeps the package surface identical while breaking the import cycle.
+_LAZY_RUNNER = ['CorpusReport', 'EpochLeakError', 'GateResult', 'StaleEpochError', 'SuiteResult', 'ci_suite', 'evaluate_gates', 'nightly_suite', 'stratified_subset']
+
+
+def __getattr__(name: str):
+    if name in _LAZY_RUNNER:
+        import importlib
+
+        return getattr(importlib.import_module("pramaan.evals.runner"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 from pramaan.evals.stats import (
     BlendedCorpusError,
     EvalError,

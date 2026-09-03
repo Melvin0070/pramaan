@@ -101,3 +101,23 @@ called "channel" and the two lists were different. Both were right about differe
 things — one names delivery slots, one names attack channels — so they are now mapped
 explicitly, with a test asserting every envelope slot is either covered by a payload or
 named as uncovered. A silently untested slot is an untested attack surface.
+
+**2026-09-03 — 1036 green tests, and two packages that could not be imported.**
+`import pramaan.calibration` and `import pramaan.tickets` both raised ImportError from a
+circular import, while the entire suite passed. The tests import submodules directly
+(`pramaan.evals.labels`), which never runs the sibling `__init__` that closes the cycle;
+anyone using the library the ordinary way would have hit it immediately. Two independent
+cycles, each created where two lanes met: `evals/__init__` eagerly imported `runner`,
+which imports `calibration.tau`, which imports `evals.labels` — and `mcp/__init__`
+eagerly imported `shadow`, which imports `tickets.adapter`, which imports back into
+`mcp`. Neither lane could have seen it; each half was fine.
+
+Fixed by deferring exactly those two edges with PEP 562 `__getattr__`, which keeps the
+package surface identical. The regression test runs each import in a **fresh
+interpreter**, because import cycles are order-dependent and a process that has already
+imported the modules cannot reproduce them — and it also asserts every name in `__all__`
+actually resolves, since a lazy loader that quietly returns nothing is worse than the
+cycle it replaced.
+
+The lesson is about the shape of the test suite, not the code: a green suite proved the
+units worked and said nothing about whether the package could be used.
