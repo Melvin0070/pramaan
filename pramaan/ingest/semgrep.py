@@ -23,6 +23,7 @@ import re
 from typing import Any, Callable
 
 from pramaan.ingest.errors import IngestError
+from pramaan.ingest.dedup import assign_occurrences
 from pramaan.schemas.finding import (
     Finding,
     Severity,
@@ -87,7 +88,8 @@ def parse_sarif(text: str, *, repo: str | None = None) -> list[Finding]:
         if not isinstance(run, dict):
             raise IngestError(f"SARIF runs[{run_index}] must be an object")
         findings.extend(_parse_sarif_run(run, run_index, repo))
-    return findings
+    # Distinguish repeated identical lines before anything downstream dedups.
+    return assign_occurrences(findings)
 
 
 def parse_json(text: str, *, repo: str | None = None) -> list[Finding]:
@@ -118,7 +120,8 @@ def parse_json(text: str, *, repo: str | None = None) -> list[Finding]:
         if not isinstance(result, dict):
             raise IngestError(f"{where} must be an object")
         findings.append(_finding_from_json_result(result, where, repo))
-    return findings
+    # Distinguish repeated identical lines before anything downstream dedups.
+    return assign_occurrences(findings)
 
 
 # --------------------------------------------------------------------------
@@ -177,7 +180,7 @@ def _finding_from_sarif_result(
 
     effective_repo = repo or "unknown"
     return Finding(
-        finding_id=make_finding_id(TOOL, rule_id, path, line_start),
+        finding_id=make_finding_id(TOOL, rule_id, effective_repo, path, line_start),
         fingerprint=make_fingerprint(TOOL, rule_id, effective_repo, path, snippet),
         tool=TOOL,
         rule_id=rule_id,
@@ -293,9 +296,20 @@ def _sarif_metadata(rule: dict[str, Any]) -> tuple[str | None, str | None]:
 
 
 def _sarif_repo(run: dict[str, Any]) -> str | None:
+    """Bare repo name, not the clone URL.
+
+    `repo` is an identity term in both `make_finding_id` and `make_fingerprint`, and
+    the corpus records it as a bare name (`razorpay-opencart`). If provenance handed
+    back `https://github.com/razorpay/razorpay-php.git` while the corpus said
+    `razorpay-php`, the same defect would carry two different fingerprints depending
+    on which path ingested it, and the verdict cache would never hit.
+    """
     prov = _sarif_provenance(run)
     uri = prov.get("repositoryUri") if prov else None
-    return uri if isinstance(uri, str) and uri else None
+    if not isinstance(uri, str) or not uri:
+        return None
+    name = uri.rstrip("/").rsplit("/", 1)[-1]
+    return name[:-4] if name.endswith(".git") else name
 
 
 def _sarif_commit(run: dict[str, Any]) -> str | None:
@@ -361,7 +375,7 @@ def _finding_from_json_result(
 
     effective_repo = repo or "unknown"
     return Finding(
-        finding_id=make_finding_id(TOOL, rule_id, path, line_start),
+        finding_id=make_finding_id(TOOL, rule_id, effective_repo, path, line_start),
         fingerprint=make_fingerprint(TOOL, rule_id, effective_repo, path, snippet),
         tool=TOOL,
         rule_id=rule_id,

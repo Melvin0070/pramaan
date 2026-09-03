@@ -57,3 +57,27 @@ fingerprint through the test factory and adding a mismatch guard to
 `CacheKey.for_attempt`, which then caught three more places where the caller and the
 attempt disagreed about which defect a row belonged to. Cost: about fifteen minutes, and
 the guard is now real coverage rather than a comment.
+
+**2026-09-03 — the corpus lane found two real defects in the "frozen" schema.**
+First, `make_finding_id` had no `repo` term. Two Razorpay payment-button plugins
+(`payment-button-siteorigin-plugin` and `payment-button-visual-composer`) vendor a
+byte-identical PHP file, so six ids collided across repos in the real corpus — and
+`FindingStore` keys on `finding_id`, so those six findings would have been silently
+dropped on import. Not hypothetical: it was demonstrated on the actual data.
+
+Second, and worse, `make_fingerprint` excluded the line number by design so a defect
+shifting down a file would still hit the verdict cache. That is right, but it meant two
+byte-identical vulnerable lines in one file hashed to the same fingerprint and `dedup`
+folded them into one record. A fix would land on the first and the second would survive
+behind a green report — the exact failure the cheating-patch detector exists to catch,
+happening one layer earlier. The corpus shipped 119 records where the scan found 121,
+and only the lane's own note made that visible; nothing in the code would have said so.
+
+Fixed by adding a per-distinct-line `occurrence` term to the fingerprint, which keeps
+all three properties at once: two identical lines stay two defects, the same line
+reported twice still collapses, and an unrelated edit above the defect still hits the
+cache. Three regression tests pin exactly that, because the properties are in tension
+and a future simplification would quietly break one.
+
+Worth recording that the freeze is what produced both findings: the lane was told to
+report rather than edit, so it reported instead of patching around them locally.

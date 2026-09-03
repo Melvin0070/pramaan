@@ -35,7 +35,7 @@ def make(
     **overrides: object,
 ) -> Finding:
     fields: dict[str, object] = {
-        "finding_id": make_finding_id(tool, rule_id, path, line_start),
+        "finding_id": make_finding_id(tool, rule_id, repo, path, line_start),
         "fingerprint": make_fingerprint(tool, rule_id, repo, path, snippet),
         "tool": tool,
         "rule_id": rule_id,

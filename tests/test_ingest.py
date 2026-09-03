@@ -18,10 +18,10 @@ from typing import Any
 
 import pytest
 
-from pramaan.ingest.dedup import dedup
+from pramaan.ingest.dedup import assign_occurrences, dedup
 from pramaan.ingest.errors import IngestError
 from pramaan.ingest.semgrep import parse_json, parse_sarif
-from pramaan.schemas.finding import Finding
+from pramaan.schemas.finding import Finding, make_finding_id
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -114,7 +114,7 @@ class TestParseSarifHappyPath:
         assert sqli.rule_id == "php.lang.security.injection.tainted-sql-string"
         assert sqli.finding_id == (
             "semgrep:php.lang.security.injection.tainted-sql-string:"
-            "app/models/User.php:42"
+            "razorpay-php:app/models/User.php:42"
         )
 
     def test_location_and_message(self) -> None:
@@ -148,7 +148,9 @@ class TestParseSarifHappyPath:
 
     def test_repo_and_commit_from_version_control_provenance(self) -> None:
         sqli = self.findings[0]
-        assert sqli.repo == "https://github.com/razorpay/razorpay-php"
+        # Bare name, not the clone URL: `repo` is a fingerprint term and the corpus
+        # records bare names, so the two ingest paths must agree or the cache misses.
+        assert sqli.repo == "razorpay-php"
         assert sqli.commit_sha == "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4"
 
     def test_tool_is_semgrep(self) -> None:
@@ -319,7 +321,7 @@ class TestParseJsonHappyPath:
         assert sqli.rule_id == "php.lang.security.injection.tainted-sql-string"
         assert sqli.finding_id == (
             "semgrep:php.lang.security.injection.tainted-sql-string:"
-            "app/models/User.php:42"
+            "unknown:app/models/User.php:42"
         )
 
     def test_severity_mapping(self) -> None:
@@ -593,3 +595,56 @@ def test_parse_json_never_returns_partial_list_on_later_bad_result() -> None:
     doc["results"] = [good, bad]
     with pytest.raises(IngestError, match="path"):
         parse_json(dump(doc))
+
+
+class TestOccurrenceIndexing:
+    """A fingerprint that ignores line numbers can over-collapse.
+
+    These three properties are in tension, and getting any of them wrong is silent:
+    the corpus would simply contain fewer findings than the scanner reported, and
+    nothing would say so.
+    """
+
+    @staticmethod
+    def _finding(line: int, *, snippet: str = '<a href="<?= $x ?>">') -> Finding:
+        return Finding(
+            finding_id=f"semgrep:xss:repo:a.php:{line}",
+            fingerprint="placeholder",
+            tool="semgrep",
+            rule_id="php.lang.security.audit.xss.var-in-href",
+            message="Variable in href",
+            severity_reported="medium",
+            repo="repo",
+            path="a.php",
+            line_start=line,
+            line_end=line,
+            snippet=snippet,
+        )
+
+    def test_two_identical_lines_are_two_defects(self) -> None:
+        # Fixing the first does not fix the second, so collapsing them would leave a
+        # live vulnerability behind a green report.
+        findings = assign_occurrences([self._finding(10), self._finding(40)])
+        assert len({f.fingerprint for f in findings}) == 2
+        assert len(dedup(findings)) == 2
+
+    def test_the_same_line_reported_twice_still_collapses(self) -> None:
+        # That is one defect the scanner mentioned twice, not two defects.
+        findings = assign_occurrences([self._finding(10), self._finding(10)])
+        assert len(dedup(findings)) == 1
+
+    def test_a_line_shift_keeps_the_fingerprint_stable(self) -> None:
+        # The verdict cache keys on fingerprint. If an unrelated edit above the defect
+        # changed it, every cached verdict would miss and the calibration set would
+        # silently start over.
+        moved = assign_occurrences([self._finding(99)])[0]
+        original = assign_occurrences([self._finding(10)])[0]
+        assert moved.fingerprint == original.fingerprint
+
+    def test_different_repos_vendoring_one_file_stay_distinct(self) -> None:
+        # Two Razorpay payment-button plugins ship a byte-identical PHP file. This
+        # produced six colliding finding_ids in the real corpus, and the store keys
+        # on finding_id, so the collision was a silently dropped finding.
+        a = make_finding_id("semgrep", "xss", "payment-button-siteorigin-plugin", "a.php", 10)
+        b = make_finding_id("semgrep", "xss", "payment-button-visual-composer", "a.php", 10)
+        assert a != b

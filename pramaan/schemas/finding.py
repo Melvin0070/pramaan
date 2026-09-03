@@ -41,22 +41,42 @@ class Finding:
         return cls(**{k: v for k, v in d.items() if k in known})
 
 
-def make_finding_id(tool: str, rule_id: str, path: str, line_start: int) -> str:
-    """Human-readable, stable within a commit. Used for tickets and PR idempotency."""
-    return f"{tool}:{rule_id}:{path}:{line_start}"
+def make_finding_id(
+    tool: str, rule_id: str, repo: str, path: str, line_start: int
+) -> str:
+    """Human-readable, stable within a commit. Used for tickets and PR idempotency.
+
+    `repo` is part of the identity because plugins vendor each other's files: two
+    Razorpay payment-button plugins ship a byte-identical PHP file at the same path,
+    which without the repo term produced six colliding ids in the real corpus. The
+    store keys on `finding_id`, so a collision is a silently dropped finding.
+    """
+    return f"{tool}:{rule_id}:{repo}:{path}:{line_start}"
 
 
 def make_fingerprint(
-    tool: str, rule_id: str, repo: str, path: str, snippet: str | None
+    tool: str,
+    rule_id: str,
+    repo: str,
+    path: str,
+    snippet: str | None,
+    occurrence: int = 0,
 ) -> str:
     """DefectDojo-style dedup hash.
 
     Deliberately excludes the line number: the same defect shifting down by an
     unrelated edit above it must dedup to one finding, not two. Snippet is
     whitespace-normalised for the same reason.
+
+    `occurrence` is what keeps that from over-collapsing. Two byte-identical
+    vulnerable lines in one file are two defects, and folding them into one record
+    means a fix lands on the first and the second silently survives -- the exact
+    failure a suppression-detector is supposed to catch. Ingest assigns the index by
+    line order within a file, so it is stable under edits elsewhere in the file while
+    still telling the second occurrence apart from the first.
     """
     normalised = " ".join((snippet or "").split())
-    payload = "|".join([tool, rule_id, repo, path, normalised])
+    payload = "|".join([tool, rule_id, repo, path, normalised, str(occurrence)])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
