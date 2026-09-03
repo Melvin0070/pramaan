@@ -10,21 +10,27 @@ fresh-context reviewer approves.
 Every verdict is schema-validated JSON with `file:line` evidence. Every tool call is
 audit-logged. The trust report publishes the numbers, including the ones that look bad.
 
-## Status: built, unmeasured
+## Status: built, live-piloted, not yet corpus-measured
 
-The harness is complete and tested — 1,219 tests, no skips. **It has not measured
-anything yet**, and the distinction matters more than the line count:
+The harness is complete and tested — 1,219 tests, no skips — and has now run live
+against the real API on a stratified pilot. It has **not** yet produced a corpus-wide,
+labelled result, and that distinction matters more than either number:
 
 | | |
 |---|---|
 | Corpus | 121 real Semgrep findings across 13 Razorpay PHP repos, with clone SHAs |
 | Labels | **0 of 121.** `data/corpus/labels.csv` is deliberately blank |
-| Live API calls made | **0** |
-| Numbers in the trust report | none — it renders the list of what it refuses to print |
+| Live API calls made | **Yes** — pilot only (n=20 stratified), see [docs/LIVE-EVIDENCE.md](docs/LIVE-EVIDENCE.md) |
+| pass^5 (pilot) | Haiku 4.5 55%, Sonnet 5 65% — both well below the 0.9 target |
+| Injection ASR, hardened (pilot) | 6.7% (2/30 deliverable), down from 30.0% unguarded |
+| Proof-of-fix, real target | Ran against a real unfixed SQLi; correctly refused to open a PR |
+| Numbers in the trust report | still none for the real corpus — precision, miss rate, tau, calibration all require the labelling pass, which has not started |
 
-Every number the project exists to publish — precision, miss rate, calibration, tau,
-pass^k, injection ASR — requires the labelling pass first. The report renders today and
-says so on its face rather than filling the gap with plausible values.
+Every *corpus-wide* number — precision, miss rate, calibration, tau, per-rule
+breakdowns — still requires the labelling pass; nothing above substitutes for it. What
+changed is that pass^k and injection ASR don't need labels, so those are now real,
+live-measured numbers rather than projections. Full detail, every caveat, and what the
+pilot explicitly is not: [docs/LIVE-EVIDENCE.md](docs/LIVE-EVIDENCE.md).
 
 See [PROJECT-BRAINSTORM.md](PROJECT-BRAINSTORM.md) for the design and the binding review
 decisions (D2–D21), [docs/RFC.md](docs/RFC.md) for how this positions against the prior
