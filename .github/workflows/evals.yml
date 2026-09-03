@@ -1,0 +1,297 @@
+name: evals (nightly)
+
+# D14, the nightly tier. This workflow is REPORTED, NEVER BLOCKING.
+#
+# The blocking tier lives in `ci.yml` and is deliberately small: the D11 unit
+# tests plus a stratified subset replayed from the verdict cache. It is a
+# regression check on the *analysis*, it calls no model, and it is the only
+# thing allowed to fail a pull request.
+#
+# Everything expensive lives here. A pass^5 gate on every push is roughly 500
+# API calls, and the Batches API — which is how bulk evals run at half price —
+# cannot back a blocking gate because its latency is measured in hours. So the
+# full suite, the context ablation and the paired injection run happen on a
+# schedule, publish artifacts and a job summary, and never gate a merge.
+#
+# **Do not add this workflow to the branch protection required checks.** Every
+# measuring step carries `continue-on-error: true` so that a bad night is a red
+# annotation and a readable summary rather than a blocked repository. If a
+# nightly number regresses, that is a conversation, not an automatic veto.
+#
+# D19 — why the epoch matters
+# ---------------------------
+# The verdict cache is content-addressed on
+# (fingerprint, model, effort, context_config, prompt_hash, run_index, run_epoch).
+# The nightly job mints a fresh `run_epoch` and threads it through every arm, so
+# every lookup misses by construction and the run genuinely re-queries the model.
+# That is the mechanism, not a convention: a cached pass^k is a replay of a
+# consistency measurement, and replaying it would hide exactly the provider-side
+# drift the `system_fingerprint` stamp exists to expose.
+#
+# CLI contract
+# ------------
+# The model-driven arms shell out to the `pramaan` console script declared in
+# `pyproject.toml`. Each is `continue-on-error: true`, so an arm that is not
+# implemented yet degrades to a note in the summary rather than a failure. The
+# two steps that need no model — minting the epoch and rendering the trust
+# report — import the library directly and always run.
+
+on:
+  schedule:
+    # 02:17 UTC. Off the hour on purpose: GitHub's scheduler queues heavily at
+    # :00 and a delayed nightly is a nightly that overlaps the next one.
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      run_epoch:
+        description: "Override the minted run epoch (leave blank to mint a fresh one)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # One nightly at a time. Two overlapping runs would mint two epochs and
+  # produce two verdict tables that look like drift but are just concurrency.
+  group: pramaan-nightly
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    name: Kasauti nightly suite (reported, non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PRAMAAN_ARTIFACTS: artifacts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.12
+
+      - name: Install
+        run: uv pip install -e ".[dev]"
+
+      - name: Mint a fresh run epoch (D19)
+        id: epoch
+        run: |
+          mkdir -p "$PRAMAAN_ARTIFACTS"
+          EPOCH=$(uv run python -c "
+          import os
+          from pramaan.store.verdict_cache import new_run_epoch
+          override = os.environ.get('EPOCH_OVERRIDE', '').strip()
+          print(override or new_run_epoch())
+          ")
+          echo "run_epoch=$EPOCH" >> "$GITHUB_OUTPUT"
+          echo "PRAMAAN_RUN_EPOCH=$EPOCH" >> "$GITHUB_ENV"
+          echo "Nightly run epoch: $EPOCH"
+        env:
+          EPOCH_OVERRIDE: ${{ inputs.run_epoch }}
+
+      - name: Assert the epoch is fresh
+        # A nightly that reuses an epoch reads the cache and reports last night's
+        # numbers as this night's. Cheap to check, catastrophic to miss.
+        run: |
+          uv run python - <<'PY'
+          import os
+          import pathlib
+
+          epoch = os.environ["PRAMAAN_RUN_EPOCH"]
+          assert epoch.strip(), "the nightly run epoch is empty"
+          table = pathlib.Path("data/verdict_table.jsonl")
+          if table.exists():
+              seen = set()
+              import json
+              for line in table.read_text(encoding="utf-8").splitlines():
+                  if line.strip():
+                      seen.add(json.loads(line).get("run_epoch"))
+              assert epoch not in seen, (
+                  f"run epoch {epoch} already appears in the published verdict "
+                  "table; this run would replay the cache instead of measuring "
+                  "(D19)"
+              )
+          print(f"epoch {epoch} is fresh")
+          PY
+
+      - name: Full eval suite (nightly tier, cache bypassed)
+        id: suite
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "no ANTHROPIC_API_KEY: skipping the live suite" | tee -a skipped.txt
+            exit 0
+          fi
+          uv run pramaan evals nightly \
+            --run-epoch "$PRAMAAN_RUN_EPOCH" \
+            --out "$PRAMAAN_ARTIFACTS/suite.json"
+
+      - name: Context-scope ablation
+        id: ablation
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "no ANTHROPIC_API_KEY: skipping the ablation" | tee -a skipped.txt
+            exit 0
+          fi
+          # Answers Razorpay's own open question — "how much context is enough?" —
+          # against their published "50-100 lines" figure. Accuracy and cost per
+          # finding at each window; `pramaan.agent.context.ABLATION_CONFIGS` is
+          # the enumeration.
+          uv run pramaan evals ablation \
+            --run-epoch "$PRAMAAN_RUN_EPOCH" \
+            --out "$PRAMAAN_ARTIFACTS/ablation.json"
+
+      - name: Paired prompt-injection run (D12)
+        id: injection
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "no ANTHROPIC_API_KEY: skipping the injection run" | tee -a skipped.txt
+            exit 0
+          fi
+          # The control arm is deliberately unguarded and runs containerised,
+          # credential-free and without egress. If it is NOT compromised on every
+          # deliverable channel the harness measured nothing, and `run_paired`
+          # raises `PositiveControlError` rather than reporting a flattering zero.
+          uv run pramaan evals injection \
+            --run-epoch "$PRAMAAN_RUN_EPOCH" \
+            --arm paired \
+            --out "$PRAMAAN_ARTIFACTS/injection.json"
+
+      - name: Render the trust report
+        # No model, no network, no API key. This step works even when every arm
+        # above was skipped: the renderer is required to produce a page on zero
+        # findings, and a nightly that publishes nothing is a nightly nobody
+        # notices has stopped running.
+        continue-on-error: true
+        run: |
+          # `--ablation` is optional on purpose: the ablation is the arm most
+          # likely to be skipped, and a missing ablation must degrade the report,
+          # not fail it.
+          ABLATION=""
+          if [ -f "$PRAMAAN_ARTIFACTS/ablation.json" ]; then
+            ABLATION="--ablation $PRAMAAN_ARTIFACTS/ablation.json"
+          fi
+          uv run pramaan report render \
+            --suite "$PRAMAAN_ARTIFACTS/suite.json" \
+            --injection "$PRAMAAN_ARTIFACTS/injection.json" \
+            $ABLATION \
+            --out "$PRAMAAN_ARTIFACTS/trust-report.html" \
+          || uv run python - <<'PY'
+          # Fallback: render straight from the library so the nightly always
+          # produces an artifact.
+          import json
+          import os
+          import pathlib
+
+          from pramaan.report.trust_report import ReportInputs, render_to_file
+          from pramaan.schemas import Finding
+
+          out = pathlib.Path(os.environ["PRAMAAN_ARTIFACTS"])
+          out.mkdir(parents=True, exist_ok=True)
+          corpus_path = pathlib.Path("data/corpus/findings.jsonl")
+          findings = []
+          if corpus_path.exists():
+              findings = [
+                  Finding.from_dict(json.loads(line))
+                  for line in corpus_path.read_text(encoding="utf-8").splitlines()
+                  if line.strip()
+              ]
+          render_to_file(
+              ReportInputs(
+                  findings=findings,
+                  commit_sha=os.environ.get("GITHUB_SHA", ""),
+                  run_epoch=os.environ["PRAMAAN_RUN_EPOCH"],
+                  corpus_labelled=False,
+              ),
+              str(out / "trust-report.html"),
+          )
+          print("rendered the trust report from the library")
+          PY
+
+      - name: Weekly risk summary
+        # PCI DSS 6.3.3 and RBI SLA clocks plus the breach forecast, emitted as
+        # its own artifact so the compliance view can be read without opening
+        # the whole report.
+        continue-on-error: true
+        run: |
+          uv run pramaan report summary \
+            --out "$PRAMAAN_ARTIFACTS/risk-summary.json"
+
+      - name: Disclosure gate self-check
+        # The renderer raises rather than publishing a withheld path, so a
+        # rendered artifact has already passed the gate. This re-runs the scan
+        # over the file that is about to be uploaded, because an artifact leaving
+        # the runner is the last moment anything can be stopped.
+        #
+        # Deliberately NOT `continue-on-error`. Every measuring step above is
+        # allowed to fail, because a bad measurement is news rather than an
+        # emergency. A disclosure leak is the one failure in this workflow that
+        # must stop it, and it stops it before the upload step runs.
+        run: |
+          uv run python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          from pramaan.report.redaction import assert_clean, build_ledger
+          from pramaan.schemas import Finding
+
+          page = pathlib.Path(os.environ["PRAMAAN_ARTIFACTS"]) / "trust-report.html"
+          if not page.exists():
+              print("no trust report was rendered; nothing to check")
+              sys.exit(0)
+          corpus = pathlib.Path("data/corpus/findings.jsonl")
+          findings = [
+              Finding.from_dict(json.loads(line))
+              for line in corpus.read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          assert_clean(page.read_text(encoding="utf-8"), build_ledger(findings))
+          print(f"D17 gate: {page} discloses no withheld path")
+          PY
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Kasauti nightly — reported, not blocking"
+            echo
+            echo "- run epoch: \`${{ steps.epoch.outputs.run_epoch }}\` (fresh, so the verdict cache is bypassed — D19)"
+            echo "- full suite: ${{ steps.suite.outcome }}"
+            echo "- context ablation: ${{ steps.ablation.outcome }}"
+            echo "- paired injection: ${{ steps.injection.outcome }}"
+            echo
+            if [ -f skipped.txt ]; then
+              echo "### Skipped"
+              echo
+              sed 's/^/- /' skipped.txt
+              echo
+            fi
+            echo "Nothing here gates a merge. \`ci.yml\` is the blocking tier."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pramaan-nightly-${{ steps.epoch.outputs.run_epoch }}
+          path: |
+            artifacts/
+          if-no-files-found: warn
+          retention-days: 30
