@@ -20,6 +20,12 @@ targets/
 # Scanner output and working state
 data/raw/
 data/worktrees/
+# Raw live-run output carries real file:line finding_ids -- D17 says no
+# file:line for unfixed findings goes public, and git history is forever
+# even after a later delete. Aggregated/redacted results are what's committed.
+data/live/
 *.sqlite
 *.sqlite-journal
+.coverage
+.coverage.*
 .DS_Store
