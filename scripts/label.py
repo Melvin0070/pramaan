@@ -7,13 +7,18 @@ read that first, this only enforces the mechanics of it.
 
 Run:  .venv/bin/python scripts/label.py
 Resume any time -- already-labelled rows are skipped automatically.
+
+Optional: --assist shows an independent second opinion AFTER you have already
+committed to your own label -- never before. Read docs/assisted-labelling-rationale.md
+before turning it on; the ordering and the model-independence below are load-bearing,
+not incidental, and the file explains why.
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import shutil
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,14 +26,45 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FINDINGS = ROOT / "data" / "corpus" / "findings.jsonl"
 LABELS = ROOT / "data" / "corpus" / "labels.csv"
+ASSIST_LOG = ROOT / "data" / "corpus" / "labels-assist-log.csv"
 TARGETS = ROOT / "targets"
 
 FIELDS = ["finding_id", "label", "confidence", "rater", "labelled_at", "notes"]
+ASSIST_LOG_FIELDS = [
+    "finding_id", "human_prelabel", "human_preconfidence",
+    "assist_label", "assist_rationale", "assist_model",
+    "agreed", "revised", "human_final_label", "logged_at",
+]
 LABELS_ALLOWED = {"t": "true_positive", "f": "false_positive", "n": "needs_human"}
+ASSIST_LABEL_MAP = {"true_positive": "t", "false_positive": "f"}
 NEEDS_HUMAN_REASONS = [
     "reachability-unclear", "mitigation-unclear",
     "out-of-corpus-dependency", "time-boxed",
 ]
+
+# Deliberately not pramaan.agent.prompts.TRIAGE_SYSTEM_PROMPT, and deliberately not
+# the same tool access as pramaan.agent.triage_runner.TriageRunner. If the assist
+# suggestion came from the actual production triage agent, showing it to the human
+# would preview the very system model_vs_human_agreement is meant to check them
+# against -- see docs/assisted-labelling-rationale.md. This is a separate, minimal,
+# no-tool-use opinion: read the pasted code, answer, one line why.
+ASSIST_SYSTEM_PROMPT = (
+    "You are a second, independent reviewer of a static-analysis finding. You will "
+    "be shown a rule name, a message, and a code excerpt. Decide whether the flagged "
+    "line is a real, exploitable instance of the issue the rule describes -- not how "
+    "severe it is, just whether the flag is correct. Answer only from the pasted "
+    "code; you have no tools and cannot read any other file. If you cannot tell from "
+    "the excerpt alone, say so plainly in the rationale rather than guessing."
+)
+ASSIST_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["label", "rationale"],
+    "properties": {
+        "label": {"enum": ["true_positive", "false_positive"]},
+        "rationale": {"type": "string", "maxLength": 240},
+    },
+}
 
 SINK_HINTS = {
     "var-in-href": "HTML-attribute output. Trace the variable to its origin; check "
@@ -97,14 +133,123 @@ def prompt(text: str, *, allowed: set[str] | None = None, default: str | None = 
         print(f"  (expected one of {sorted(allowed)})")
 
 
+def load_assist_log() -> list[dict[str, str]]:
+    if not ASSIST_LOG.exists():
+        return []
+    with ASSIST_LOG.open(newline="", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
+
+
+def append_assist_log(entry: dict[str, str]) -> None:
+    exists = ASSIST_LOG.exists()
+    with ASSIST_LOG.open("a", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=ASSIST_LOG_FIELDS)
+        if not exists:
+            w.writeheader()
+        w.writerow(entry)
+
+
+def get_code_text(finding: dict, context: int = 8) -> str:
+    """Same window show_code() prints, as a string for the assist prompt."""
+    path = TARGETS / finding["repo"] / finding["path"]
+    if not path.exists():
+        return finding.get("snippet") or "(no code available)"
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    lo = max(1, finding["line_start"] - context)
+    hi = min(len(lines), finding["line_end"] + context)
+    out = []
+    for n in range(lo, hi + 1):
+        marker = ">>" if finding["line_start"] <= n <= finding["line_end"] else "  "
+        text = lines[n - 1] if n - 1 < len(lines) else ""
+        out.append(f"{marker} {n:>5} | {text}")
+    return "\n".join(out)
+
+
+def assist_suggestion(finding: dict, model: str) -> tuple[str, str] | None:
+    """One independent opinion: (label, rationale), or None if the call failed.
+
+    A failure here is not fatal to the row -- assist is a convenience, not a
+    dependency, and the human's own label already stands regardless of whether
+    this succeeds.
+    """
+    import anyio
+    from claude_agent_sdk import ClaudeAgentOptions, query
+
+    body = (
+        f"rule: {finding['rule_id']}\n"
+        f"message: {finding['message']}\n"
+        f"cwe: {finding.get('cwe')}\n\n"
+        f"code (>> marks the flagged line(s)):\n{get_code_text(finding)}\n"
+    )
+    options = ClaudeAgentOptions(
+        model=model,
+        system_prompt=ASSIST_SYSTEM_PROMPT,
+        allowed_tools=[],
+        disallowed_tools=["Bash", "Read", "Write", "Edit", "Grep", "Glob",
+                          "WebFetch", "WebSearch"],
+        permission_mode="dontAsk",
+        setting_sources=[],
+        output_format={"type": "json_schema", "schema": ASSIST_SCHEMA},
+        max_turns=1,
+        max_budget_usd=0.10,
+    )
+
+    async def _call() -> tuple[str, str] | None:
+        # Explicit aclose() rather than an early `return` inside the `async for`:
+        # returning mid-iteration abandons query()'s generator, and the SDK later
+        # tries to close it from whatever context GC runs in -- by then anyio.run()
+        # has already torn the event loop down, which is what raised the
+        # 'aclose(): asynchronous generator is already running' warning here on the
+        # first live test. Closing it explicitly, in the loop it was opened in, is
+        # what makes the warning go away rather than just becoming intermittent.
+        agen = query(prompt=body, options=options).__aiter__()
+        try:
+            while True:
+                msg = await agen.__anext__()
+                if type(msg).__name__ == "ResultMessage":
+                    so = getattr(msg, "structured_output", None)
+                    if isinstance(so, dict) and "label" in so:
+                        return so["label"], so.get("rationale", "")
+        except StopAsyncIteration:
+            return None
+        finally:
+            await agen.aclose()
+
+    try:
+        return anyio.run(_call)
+    except Exception as exc:  # noqa: BLE001 -- convenience path, never fatal
+        print(f"  (assist call failed: {type(exc).__name__}: {exc} -- continuing without it)")
+        return None
+
+
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--assist", action="store_true",
+        help="show an independent second opinion after you commit your own label "
+             "(read docs/assisted-labelling-rationale.md first)",
+    )
+    ap.add_argument("--assist-model", default="claude-haiku-4-5-20251001")
+    args = ap.parse_args()
+
     if not FINDINGS.exists() or not LABELS.exists():
         print("run this from the repo root; data/corpus/{findings.jsonl,labels.csv} not found")
         return 1
 
+    if args.assist:
+        print("=" * 78)
+        print("ASSIST MODE. The assist opinion is shown only AFTER you commit your own")
+        print("label -- it cannot anchor a judgement you haven't made yet. It is a")
+        print("separate, minimal, tool-free model, not the production triage agent.")
+        print("Not for the official pass 1/pass 2 wash-out unless BOTH passes use it")
+        print("and you report that. Full reasoning: docs/assisted-labelling-rationale.md")
+        print("=" * 78)
+        if prompt("Continue with assist on? [y/n]: ", allowed={"y", "n"}) != "y":
+            return 0
+        print()
+
     findings = load_findings()
     rows = load_rows()
-    by_id = {r["finding_id"]: r for r in rows}
     pending = [r for r in rows if not r["label"].strip()]
 
     if not pending:
@@ -174,6 +319,54 @@ def main() -> int:
         notes = input("notes (required for needs_human, optional otherwise): ").strip()
         if label == "needs_human" and not notes:
             notes = prompt("  notes cannot be empty for needs_human -- give a reason: ")
+
+        # Assist runs here, and only here: after label/confidence/notes are already
+        # committed. Nothing above this line changes when --assist is on -- that is
+        # what makes the human's initial call independent of the suggestion below.
+        if args.assist and label in ASSIST_LABEL_MAP:
+            print("\n  (consulting assist...)")
+            result = assist_suggestion(f, args.assist_model)
+            if result is not None:
+                assist_label, assist_rationale = result
+                human_original_label = label  # captured before any revision below
+                human_original_confidence = confidence
+                agreed = assist_label == label
+                print(f"  assist: {assist_label}  ({assist_rationale})")
+                print(f"  {'agrees with you' if agreed else 'DISAGREES with you'}")
+
+                revised = False
+                if not agreed:
+                    switch = prompt(
+                        "  revise your label to match assist, or keep your own? "
+                        "[k]eep / [r]evise: ",
+                        allowed={"k", "r"},
+                    )
+                    if switch == "r":
+                        revised = True
+                        confidence = prompt(
+                            "  confidence in the revised label, 1-5: ",
+                            allowed={"1", "2", "3", "4", "5"},
+                        )
+                        label = assist_label
+
+                append_assist_log({
+                    "finding_id": fid,
+                    "human_prelabel": human_original_label,
+                    "human_preconfidence": human_original_confidence,
+                    "assist_label": assist_label,
+                    "assist_rationale": assist_rationale,
+                    "assist_model": args.assist_model,
+                    "agreed": str(agreed),
+                    "revised": str(revised),
+                    "human_final_label": label,
+                    "logged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                })
+                suffix = (
+                    "[assist: agreed]" if agreed
+                    else "[assist: disagreed, revised]" if revised
+                    else "[assist: disagreed, kept own]"
+                )
+                notes = f"{notes} {suffix}".strip()
 
         elapsed = time.monotonic() - row_start
         if elapsed > 600:
