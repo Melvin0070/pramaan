@@ -123,6 +123,82 @@ def show_code(finding: dict, context: int = 8) -> None:
         print(f"  {marker} {n:>5} | {text}")
 
 
+VARIABLE_PATTERN = __import__("re").compile(
+    r'\$[A-Za-z_][A-Za-z0-9_]*(?:\[[\'\"]?[A-Za-z0-9_]+[\'\"]?\])?'
+)
+REACHABILITY_SIGNALS = [
+    (r"current_user_can\s*\(\s*['\"]([^'\"]+)['\"]", "capability gate: current_user_can({!r})"),
+    (r"add_(?:sub)?menu_page\s*\([^;]*", "menu registration on this line -- check its capability argument"),
+    (r"wp_verify_nonce", "nonce check present in this file"),
+    (r"is_admin\s*\(\s*\)", "is_admin() check present in this file"),
+    (r"add_action\s*\(\s*['\"]admin_post_", "registered via an admin_post_* action"),
+    (r"add_action\s*\(\s*['\"]wp_ajax_(?!nopriv)", "registered via wp_ajax_* (logged-in users only, no privilege check by itself)"),
+    (r"add_action\s*\(\s*['\"]wp_ajax_nopriv_", "registered via wp_ajax_nopriv_* -- reachable UNAUTHENTICATED"),
+]
+ESCAPE_FUNCTIONS = [
+    "esc_html", "esc_attr", "esc_url", "esc_js", "htmlentities",
+    "htmlspecialchars", "wp_kses", "pSQL", "prepare", "bindParam", "bindValue",
+]
+
+
+def gather_trace_hints(finding: dict) -> None:
+    """Mechanical fact-gathering only -- never a verdict, never a suggestion.
+
+    Automates the grep legwork steps 1/3/4/5 of the rubric actually require (find
+    where the flagged variable comes from, check for a capability gate, check
+    whether the file has an established escaping convention) so the human's time
+    goes into the decision, not into re-discovering facts by hand for every row.
+    Every one of these can be wrong or incomplete -- it is a starting point for
+    your own read of the code above, not a substitute for it.
+    """
+    path = TARGETS / finding["repo"] / finding["path"]
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    flagged_start = finding["line_start"]
+
+    flagged_lines = "\n".join(
+        lines[finding["line_start"] - 1: finding["line_end"]]
+    )
+    variables = sorted(set(VARIABLE_PATTERN.findall(flagged_lines)))
+    base_vars = sorted({v.split("[")[0] for v in variables})
+
+    printed_anything = False
+
+    if base_vars:
+        for var in base_vars[:3]:  # cap noise on lines with many variables
+            assign_re = __import__("re").compile(
+                __import__("re").escape(var) + r"\s*=(?!=)"
+            )
+            hit = None
+            for n in range(min(flagged_start, len(lines)), 0, -1):
+                if assign_re.search(lines[n - 1]):
+                    hit = n
+                    break
+            if hit:
+                printed_anything = True
+                print(f"  trace: {var} last assigned at line {hit}:")
+                print(f"         {lines[hit - 1].strip()[:110]}")
+
+    for pattern, template in REACHABILITY_SIGNALS:
+        m = __import__("re").search(pattern, text)
+        if m:
+            printed_anything = True
+            msg = template.format(m.group(1)) if "{" in template and m.groups() else template
+            print(f"  reachability signal: {msg}")
+
+    used_escapes = sorted({fn for fn in ESCAPE_FUNCTIONS if fn + "(" in text})
+    if used_escapes:
+        printed_anything = True
+        print(f"  file already uses: {', '.join(used_escapes)} elsewhere "
+              f"-- is this line missing a convention the rest of the file follows?")
+
+    if not printed_anything:
+        print("  trace: no automatic hints found -- nothing wrong with that, just "
+              "means this one needs a normal manual read")
+
+
 def prompt(text: str, *, allowed: set[str] | None = None, default: str | None = None) -> str:
     while True:
         raw = input(text).strip()
@@ -294,6 +370,8 @@ def main() -> int:
                   f"one row survives)")
         print()
         show_code(f)
+        print()
+        gather_trace_hints(f)
 
         print()
         choice = prompt(
