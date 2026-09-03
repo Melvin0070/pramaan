@@ -1,0 +1,253 @@
+# Deterministic business-impact path tagging (binding decision D9).
+#
+# These globs are the half of the sensitivity signal that a prompt injection
+# cannot rewrite. `pramaan.policy.engine` unions the model's own observations ON
+# TOP of whatever this file says; the model can add a tag and can never clear
+# one.
+#
+# Every glob below was written against the real file trees of:
+#   razorpay/razorpay-woocommerce   razorpay/razorpay-php
+#   razorpay/razorpay-opencart      razorpay/razorpay-prestashop
+#   razorpay/razorpay-magento       (plus WooCommerce core, for host-repo scans)
+# Paths named in comments are files that actually exist in those repos.
+#
+# Matching is case-insensitive and generous on purpose. Over-tagging costs a
+# human review; under-tagging lets the harness auto-close or auto-fix a payment
+# path. Only the second is a security failure, so every judgement call here goes
+# the over-tagging way.
+#
+# Tag vocabulary is validated against `BusinessImpact` at load time. A typo is a
+# load error, never a rule that silently matches nothing.
+
+version: 1
+
+rules:
+
+  # ---------------------------------------------------------------------- #
+  # PAYMENT PATH
+  # ---------------------------------------------------------------------- #
+
+  - name: woocommerce-gateway-entrypoints
+    intent: >
+      The razorpay-woocommerce gateway class, the block checkout shim and the
+      one-click-checkout REST surface. This is the plugin's entire externally
+      reachable money path: order creation, coupons, gift cards, prepaid COD
+      conversion and shipping quotes all take untrusted request data.
+    tags: [payment_path, pci_scope_hint]
+    globs:
+      - "**/woo-razorpay.php"            # WC_Razorpay gateway + key_id/key_secret settings
+      - "**/checkout-block.php"          # WooCommerce Blocks payment method registration
+      - "**/includes/api/**"             # order.php, cart.php, coupon-*.php, giftcard-apply.php,
+                                         # prepay-cod.php, shipping-info.php, save-abandonment-data.php
+      - "**/includes/support/**"         # cartbase/cartbounty/smart-coupons/wati cart integrations
+      - "**/includes/cron/one-click-checkout/**"
+      - "**/includes/razorpay-affordability-widget.php"
+      - "**/includes/subscriptions.php"
+      - "**/razorpay-subscriptions.php"
+
+  - name: opencart-prestashop-magento-payment-controllers
+    intent: >
+      The equivalent gateway entry points in the sibling plugins. OpenCart splits
+      catalog (customer-facing) and admin (key storage) controllers; PrestaShop
+      puts order validation in a front controller; Magento uses Controller/Payment.
+    tags: [payment_path, pci_scope_hint]
+    globs:
+      - "**/catalog/controller/payment/**"            # OpenCart 2.x
+      - "**/catalog/model/payment/**"
+      - "**/admin/controller/payment/**"
+      - "**/admin/model/payment/**"
+      - "**/controller/extension/payment/**"          # OpenCart 3.x layout
+      - "**/model/extension/payment/**"
+      - "**/controllers/front/validation.php"         # PrestaShop payment validation
+      - "**/controllers/front/order.php"
+      - "**/controllers/front/payment.php"
+      - "**/razorpay.php"                             # PrestaShop module root + OpenCart controllers
+      - "**/Controller/Payment/**"                    # Magento: Callback/Order/Validate/Webhook
+      - "**/Controller/BaseController.php"
+      - "**/Model/PaymentMethod.php"
+      - "**/Model/PaymentAction.php"
+      - "**/Model/Checkout*.php"
+      - "**/Observer/AfterPlaceOrderObserver.php"
+
+  - name: woocommerce-core-payment-surface
+    intent: >
+      WooCommerce core itself, for runs where the host platform is in scope
+      rather than just the plugin. The abstract gateway and the checkout/cart
+      controllers are where a plugin-side taint actually reaches money.
+    tags: [payment_path]
+    globs:
+      - "**/includes/gateways/**"
+      - "**/abstracts/abstract-wc-payment-gateway.php"
+      - "**/class-wc-payment-gateways.php"
+      - "**/class-wc-checkout.php"
+      - "**/class-wc-cart.php"
+
+  - name: checkout-and-cart-by-name
+    intent: >
+      Catch-all for checkout/cart/order/refund files the layout rules above miss,
+      across plugin families that keep inventing new directory conventions.
+    tags: [payment_path]
+    globs:
+      - "**/*checkout*.php"
+      - "**/*cart*.php"       # cartbase.php, cartbounty.php, ResetCart.php, class-wc-cart.php
+      - "**/*refund*.php"
+      - "**/*payment*.php"
+
+  - name: razorpay-php-sdk-money-resources
+    intent: >
+      The Razorpay PHP SDK's payment resources, matched wherever the SDK is
+      vendored: razorpay-php/src/, razorpay-woocommerce/razorpay-sdk/src/,
+      razorpay-opencart/system/library/razorpay/razorpay-sdk/. D2's propagation
+      concern lives here - one SDK defect fans out to every bundled copy.
+    tags: [payment_path]
+    globs:
+      - "**/src/Payment*.php"          # Payment.php, PaymentLink.php, PaymentPage.php
+      - "**/src/Order.php"
+      - "**/src/Refund.php"
+      - "**/src/Invoice.php"
+      - "**/src/Subscription.php"
+      - "**/src/Addon.php"
+      - "**/src/Plan.php"
+      - "**/src/Item.php"
+      - "**/src/QrCode.php"
+      - "**/src/VirtualAccount.php"
+      - "**/src/Api.php"               # base URL + credential wiring for every call
+      - "**/Razorpay.php"              # SDK autoloader/entry shipped at each vendor root
+
+  # ---------------------------------------------------------------------- #
+  # WEBHOOKS - unauthenticated inbound money events
+  # ---------------------------------------------------------------------- #
+
+  - name: webhook-handlers
+    intent: >
+      Webhook endpoints are internet-reachable, unauthenticated until the HMAC
+      check passes, and drive order state and payouts. A parsing or signature
+      defect here is directly exploitable, so they carry the settlement tag too.
+    tags: [payment_path, auth_or_session, kyc_or_settlement, pci_scope_hint]
+    globs:
+      - "**/*webhook*.php"      # includes/razorpay-webhook.php, controllers/front/webhook.php,
+                                # Controller/Payment/Webhook.php, Model/WebhookEvents.php,
+                                # Model/WebhookUrl.php, razorpay-lib/createwebhook.php, src/Webhook.php
+      - "**/*webhook*.js"
+
+  # ---------------------------------------------------------------------- #
+  # SETTLEMENT / PAYOUT / KYC
+  # ---------------------------------------------------------------------- #
+
+  - name: settlement-transfer-payout
+    intent: >
+      Money leaving Razorpay: settlements, Route transfers to linked accounts,
+      fund accounts and payouts. RBI PA Directions treat these as the highest
+      blast-radius surface in a payment aggregator integration.
+    tags: [kyc_or_settlement, payment_path]
+    globs:
+      - "**/src/Settlement.php"
+      - "**/src/Transfer.php"
+      - "**/src/FundAccount.php"
+      - "**/src/Dispute.php"            # chargebacks adjust settled balances
+      - "**/*settlement*.php"
+      - "**/*payout*.php"
+      - "**/*razorpay-route*.php"       # includes/razorpay-route.php, razorpay-route-actions.php
+      - "**/*razorpay_route*.php"
+      - "**/*linked*account*.php"
+
+  - name: kyc-and-onboarding
+    intent: >
+      Razorpay Onboarding APIs. Account/Stakeholder/Document carry merchant KYC
+      identity documents, which DPDP Rules 2025 rule 7 puts on a 72-hour
+      escalation clock if exposed.
+    tags: [kyc_or_settlement]
+    globs:
+      - "**/src/Account.php"
+      - "**/src/Stakeholder.php"
+      - "**/src/Document.php"           # KYC document upload
+      - "**/src/Product.php"            # product configuration during onboarding
+      - "**/*kyc*.php"
+      - "**/*onboard*.php"
+      - "**/*stakeholder*.php"
+
+  # ---------------------------------------------------------------------- #
+  # AUTH / SESSION / SIGNATURE / KEY HANDLING
+  # ---------------------------------------------------------------------- #
+
+  - name: signature-verification
+    intent: >
+      Utility::verifyPaymentSignature and verifyWebhookSignature are the single
+      control standing between a forged callback and a fulfilled order. A
+      timing-unsafe compare or an early return here is a critical auth bypass.
+    tags: [auth_or_session, payment_path]
+    globs:
+      - "**/src/Utility.php"
+      - "**/src/Errors/SignatureVerificationError.php"
+      - "**/*signature*.php"            # tests/SignatureVerificationTest.php and friends
+      - "**/*hmac*.php"
+      - "**/*verify*.php"
+
+  - name: oauth-and-api-credentials
+    intent: >
+      OAuth token exchange plus the transport that attaches key_id/key_secret as
+      HTTP Basic on every outbound call, including the vendored Requests library
+      that actually builds the Authorization header.
+    tags: [auth_or_session, pci_scope_hint]
+    globs:
+      - "**/src/OAuth*.php"                    # OAuth.php, OAuthClient.php, OAuthValidator.php
+      - "**/src/Request.php"                   # SDK request builder: sets Basic auth
+      - "**/includes/api/auth.php"             # 1cc REST auth
+      - "**/libs/Requests-*/src/Auth.php"
+      - "**/libs/Requests-*/src/Auth/**"
+      - "**/libs/Requests-*/library/Requests.php"
+      - "**/*oauth*.php"
+
+  - name: session-cookie-csrf-nonce
+    intent: >
+      Session, cookie, nonce and CSRF handling. Magento's Plugin/CsrfValidatorSkip
+      is a live example of the case that matters most: a file whose entire job is
+      to turn a control off.
+    tags: [auth_or_session]
+    globs:
+      - "**/*session*.php"
+      - "**/*cookie*.php"
+      - "**/Cookie/**"
+      - "**/*nonce*.php"
+      - "**/*csrf*.php"                 # Plugin/CsrfValidatorSkip.php
+      - "**/*login*.php"
+      - "**/*auth*.php"
+
+  - name: credential-and-key-material
+    intent: >
+      Files that store or transport merchant API keys, plus raw key/cert material
+      and environment files. `.env.github` and the vendored cacert.pem bundle are
+      real paths in razorpay-woocommerce.
+    tags: [auth_or_session, pci_scope_hint]
+    globs:
+      - "**/*credential*.php"
+      - "**/*secret*.php"
+      - "**/*api-key*.php"
+      - "**/*apikey*.php"
+      - "**/*key_id*.php"
+      - "**/Model/Config.php"           # Magento: stores key_id/key_secret
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/*.p12"
+      - "**/*.pfx"
+      - "**/.env"
+      - "**/.env.*"
+
+  # ---------------------------------------------------------------------- #
+  # PCI SCOPE
+  # ---------------------------------------------------------------------- #
+
+  - name: card-data-and-tokenisation
+    intent: >
+      Anything that can touch a PAN, a network token or a card BIN. Iin.php is
+      the BIN lookup API; Card.php and Token.php are the saved-card surface.
+      PCI DSS 4.0.1 scoping puts these squarely in the CDE-adjacent set.
+    tags: [pci_scope_hint, payment_path]
+    globs:
+      - "**/src/Card.php"
+      - "**/src/Token.php"
+      - "**/src/Iin.php"
+      - "**/*card*.php"                 # giftcard-apply.php also lands here; over-tagging is fine
+      - "**/*token*.php"
+      - "**/*cvv*.php"
+      - "**/*bin-lookup*.php"
