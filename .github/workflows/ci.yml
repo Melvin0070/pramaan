@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.12
+
+      - name: Install
+        run: uv pip install -e ".[dev]"
+
+      # D14: CI blocks on the deterministic layer only. The full eval suite, the
+      # context ablation and the paired injection run go nightly via Batches --
+      # a pass^5 gate on every push is ~500 API calls, and Batches cannot back a
+      # blocking gate.
+      - name: Unit tests (deterministic layer)
+        run: uv run pytest -q --tb=short
+
+      - name: Schema self-check
+        run: |
+          uv run python -c "
+          import jsonschema
+          from pramaan.schemas import VERDICT_SCHEMA, FINDING_SCHEMA
+          jsonschema.Draft202012Validator.check_schema(VERDICT_SCHEMA)
+          jsonschema.Draft202012Validator.check_schema(FINDING_SCHEMA)
+          # D8: the model must not be able to state an action. If these ever appear
+          # in the verdict schema, the policy engine has been bypassed.
+          banned = {'severity', 'ssvc_decision', 'recommended_action'}
+          leaked = banned & VERDICT_SCHEMA['properties'].keys()
+          assert not leaked, f'D8 violated: model schema exposes {leaked}'
+          assert VERDICT_SCHEMA['additionalProperties'] is False
+          print('schemas OK, D8 invariant holds')
+          "
