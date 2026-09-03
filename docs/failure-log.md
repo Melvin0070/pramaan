@@ -45,3 +45,15 @@ key, which is exactly the drift the `KEY_FIELDS` constant exists to prevent in c
 Both fixed. Cost: nothing, because it was caught before three other lanes built on it —
 but it is the second time the freeze has been the thing that surfaced a defect rather
 than hidden one.
+
+**2026-09-03 — I broke 39 tests by "fixing" the frozen schema mid-build.**
+Adding a required `fingerprint` field to `Attempt` was the right call, but I landed it
+on `main` while the store lane's 93 tests were already written against the old shape,
+so the merge went red immediately: `Attempt.__init__() missing 1 required positional
+argument`. The lesson is not "don't change frozen schemas" — the change was correct and
+the store lane is what surfaced the need. It is that a schema change is an integration
+event and has to be landed with its call sites, not before them. Fixed by threading the
+fingerprint through the test factory and adding a mismatch guard to
+`CacheKey.for_attempt`, which then caught three more places where the caller and the
+attempt disagreed about which defect a row belonged to. Cost: about fifteen minutes, and
+the guard is now real coverage rather than a comment.

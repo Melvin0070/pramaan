@@ -131,7 +131,18 @@ class CacheKey:
 
     @classmethod
     def for_attempt(cls, fingerprint: str, attempt: Attempt) -> CacheKey:
-        """`Attempt` carries no fingerprint, so the caller supplies it."""
+        """Build the key for an attempt.
+
+        `Attempt` now carries its own `fingerprint`. The parameter is kept so
+        existing call sites still read explicitly, but a mismatch means the caller
+        and the attempt disagree about which defect this is -- which would file the
+        row under the wrong key and silently poison every later lookup.
+        """
+        if attempt.fingerprint and attempt.fingerprint != fingerprint:
+            raise ValueError(
+                f"fingerprint mismatch: caller passed {fingerprint!r}, "
+                f"attempt carries {attempt.fingerprint!r}"
+            )
         return cls(
             fingerprint=fingerprint,
             model=attempt.model,

@@ -49,11 +49,13 @@ def attempt(
     effort: str = "high",
     context_config: str = "ctx50_callers",
     prompt_hash: str = "p" * 32,
+    fingerprint: str = FP,
     verdict: dict | None = None,
     **overrides: object,
 ) -> Attempt:
     fields: dict[str, object] = {
         "finding_id": "semgrep:sqli:src/Api.php:42",
+        "fingerprint": fingerprint,
         "run_index": run_index,
         "status": status,
         "verdict": VERDICT if (verdict is None and status == "valid") else verdict,
@@ -372,7 +374,7 @@ def test_editing_one_skill_invalidates_only_its_rows(cache):
     assert sqli_hash != xss_hash
 
     cache.put(FP, attempt(prompt_hash=sqli_hash), components=sqli_components)
-    cache.put("b" * 32, attempt(prompt_hash=xss_hash), components=xss_components)
+    cache.put("b" * 32, attempt(prompt_hash=xss_hash, fingerprint="b" * 32), components=xss_components)
     assert cache.count() == 2
 
     dropped = cache.invalidate_component("skill:cwe-89")
@@ -388,7 +390,7 @@ def test_a_shared_component_edit_invalidates_both(cache):
     )
     xss_hash, xss_components = _prompt(system="rubric v1", **{"skill:cwe-79": "xss v1"})
     cache.put(FP, attempt(prompt_hash=sqli_hash), components=sqli_components)
-    cache.put("b" * 32, attempt(prompt_hash=xss_hash), components=xss_components)
+    cache.put("b" * 32, attempt(prompt_hash=xss_hash, fingerprint="b" * 32), components=xss_components)
 
     assert cache.invalidate_component("system") == 2
     assert cache.count() == 0
@@ -470,7 +472,7 @@ def test_export_carries_the_key_and_every_status(tmp_path, cache):
 
 
 def test_export_is_deterministic(tmp_path, cache):
-    cache.put("c" * 32, attempt(run_index=1))
+    cache.put("c" * 32, attempt(run_index=1, fingerprint="c" * 32))
     cache.put(FP, attempt(run_index=1))
     cache.put(FP, attempt(run_index=0))
     first, second = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
