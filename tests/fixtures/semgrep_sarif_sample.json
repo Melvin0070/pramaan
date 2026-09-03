@@ -1,0 +1,140 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Semgrep",
+          "semanticVersion": "1.45.0",
+          "informationUri": "https://semgrep.dev",
+          "rules": [
+            {
+              "id": "php.lang.security.injection.tainted-sql-string",
+              "name": "php.lang.security.injection.tainted-sql-string",
+              "shortDescription": {
+                "text": "Tainted SQL string"
+              },
+              "fullDescription": {
+                "text": "User input flows into a SQL query string without parameterisation."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://semgrep.dev/r/php.lang.security.injection.tainted-sql-string",
+              "help": {
+                "text": "Use a prepared statement instead of string concatenation."
+              },
+              "properties": {
+                "precision": "very-high",
+                "confidence": "HIGH",
+                "cwe": [
+                  "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+                ],
+                "owasp": [
+                  "A03:2021 - Injection"
+                ],
+                "tags": [
+                  "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+                  "security",
+                  "external/cwe/cwe-089",
+                  "OWASP-A03:2021"
+                ]
+              }
+            },
+            {
+              "id": "php.lang.security.audit.xss.direct-response-write",
+              "name": "php.lang.security.audit.xss.direct-response-write",
+              "shortDescription": {
+                "text": "Unescaped output written directly to the response"
+              },
+              "fullDescription": {
+                "text": "Data reaches an echo/print sink without an escaping function."
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://semgrep.dev/r/php.lang.security.audit.xss.direct-response-write",
+              "properties": {
+                "precision": "medium",
+                "confidence": "MEDIUM",
+                "tags": [
+                  "security",
+                  "external/cwe/cwe-079",
+                  "OWASP-A03:2021 - Injection"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "versionControlProvenance": [
+        {
+          "repositoryUri": "https://github.com/razorpay/razorpay-php",
+          "revisionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4",
+          "branch": "main"
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "php.lang.security.injection.tainted-sql-string",
+          "ruleIndex": 0,
+          "message": {
+            "text": "Tainted SQL string constructed from `$_GET['id']` and passed to `mysqli_query` without a prepared statement."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "app/models/User.php",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 42,
+                  "endLine": 44,
+                  "startColumn": 5,
+                  "endColumn": 61,
+                  "snippet": {
+                    "text": "$query = \"SELECT * FROM users WHERE id = \" . $_GET['id'];"
+                  }
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "matchBasedId/v1": "abcdef0123456789abcdef0123456789abcdef01"
+          }
+        },
+        {
+          "ruleId": "php.lang.security.audit.xss.direct-response-write",
+          "ruleIndex": 1,
+          "message": {
+            "text": "`$_POST['comment']` is echoed without htmlspecialchars()."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "app/views/render.php",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 10,
+                  "endLine": 10,
+                  "startColumn": 1,
+                  "endColumn": 40,
+                  "snippet": {
+                    "text": "echo $_POST['comment'];"
+                  }
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "matchBasedId/v1": "1122334455667788990011223344556677889900"
+          }
+        }
+      ]
+    }
+  ]
+}
