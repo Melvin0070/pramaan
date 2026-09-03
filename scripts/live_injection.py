@@ -298,7 +298,7 @@ def main() -> int:
         "not_measurable_objectives": sorted(NOT_MEASURABLE),
         "baseline_clean": baseline,
         "observations": [
-            {"payload_id": p, "arm": a, **{k: v for k, v in (asdict(o) if is_dataclass(o) else o.__dict__).items() if k != "output_text"}}
+            (asdict(o) if is_dataclass(o) else dict(o.__dict__))  # payload_id/arm are fields; output_text kept
             for (p, a), o in observations.items()
         ],
     }, indent=2, default=str))

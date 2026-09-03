@@ -208,6 +208,32 @@ Non-goals: writing a scanner; running against anything but local containers and 
 
 ## Budget
 
+Reconciled 2026-09-03 per TODO 8. The original table (below the rule) was a pre-build
+guess; the rows above it are measured, from `docs/LIVE-EVIDENCE.md`. The corpus is 121
+findings, not 200, and has no full-proof PoC target of its own — Juice Shop carries that
+funnel — so the shape of the original table was already slightly off before any number
+was measured.
+
+| Item | Model | Measured |
+|---|---|---|
+| Triage, 20 findings × 5 runs (pilot, not the full 121) | Haiku 4.5, `effort=medium` | $13.61 |
+| Triage, same 20 × 5, model comparison | Sonnet 5, `effort=medium` | $14.59 |
+| Paired injection run, 40 payloads × 2 arms | Haiku 4.5 | $3.70 |
+| **Extrapolated: full 121-finding corpus × 5 runs, Sonnet** | Sonnet 5 | **~$88** (121/20 × $14.59) |
+| Full pass^5, Haiku instead | Haiku 4.5 | ~$82 |
+
+Not yet measured: fixer attempts (`effort=xhigh`, more turns, expected materially higher
+per-attempt cost than triage), reviewer + judge calls, the context-scope ablation (8
+configs — no line item existed for it in the original table either, per the eng-review
+finding this section is here to close). All spend so far ran through the Claude Max
+subscription (`authMethod: claude.ai`), not pay-as-you-go — dollar figures above are
+API-list-price references the SDK always reports, useful for this table and for the
+trust report's own "cost per finding" claim, but the actual constraint on further runs
+is subscription rate limits, not a dollar ceiling.
+
+<details>
+<summary>Original pre-build estimate (superseded, kept for the record)</summary>
+
 | Item | Model | Rough spend |
 |---|---|---|
 | Triage evals, 200 findings × 5 runs | Sonnet 5 via Batches | $20–40 |
@@ -215,7 +241,11 @@ Non-goals: writing a scanner; running against anything but local containers and 
 | Reviewer + judges | Opus 5 / Sonnet 5 | $10–30 |
 | Total for the whole build | | order of $100–250 |
 
-Order-of-magnitude estimates; the trust report should publish the measured numbers.
+The $20–40 triage line undershot what a full-corpus run actually costs by roughly 2–4×
+once measured — a useful data point on how much to trust an order-of-magnitude guess
+made before day 0.
+
+</details>
 
 ## Alternatives considered
 
