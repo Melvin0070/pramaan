@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Secrets — the audit log redacts, but nothing should get this far
+.env
+.env.*
+*.pem
+*.key
+
+# Target repos are cloned, never vendored
+targets/
+!targets/.gitkeep
+
+# Scanner output and working state
+data/raw/
+data/worktrees/
+*.sqlite
+*.sqlite-journal
+.DS_Store
