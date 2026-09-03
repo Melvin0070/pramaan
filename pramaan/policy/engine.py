@@ -245,6 +245,13 @@ def decide(
     if not 0.0 <= tau <= 1.0:
         raise ValueError(f"tau must be in [0.0, 1.0], got {tau!r}")
 
+    # tau == 1.0 is the calibration layer's "no threshold reached the target
+    # precision" sentinel, not a very strict gate. Without this branch a verdict
+    # claiming exactly 1.0 confidence would clear `conf >= tau` and auto-close on a
+    # gate that was never derived -- and a model asserting total certainty is the
+    # least trustworthy input this function receives, not the most.
+    gate_underived = tau >= 1.0
+
     effective = effective_tags(verdict, tags)
     conf = verdict.confidence
     reach = verdict.reachability
@@ -369,7 +376,7 @@ def decide(
         # ---- Row 1: FP at or above tau, no sensitive path ----------------- #
         # NaN confidence compares False here and falls through to row 2, which
         # is the safe direction.
-        if conf >= tau:
+        if conf >= tau and not gate_underived:
             return Decision(
                 ssvc_decision="track",
                 severity="low",

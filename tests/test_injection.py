@@ -317,3 +317,37 @@ class TestPairedRun:
             "hardened_zero_by_construction"
         ]
         assert d["control_compromised"]
+
+
+def test_every_reporting_channel_maps_to_a_delivery_slot() -> None:
+    """The report must not quote two different channel vocabularies.
+
+    `prompts` names delivery slots in the untrusted envelope; `payloads` names the
+    attack channels TODO 1 reports on. Both are legitimate and they are not the same
+    list, so the mapping between them is asserted rather than assumed.
+    """
+    from pramaan.agent import prompts
+    from pramaan.evals.payloads import (
+        CHANNELS,
+        DELIVERY_SLOT,
+        UNCOVERED_DELIVERY_SLOTS,
+    )
+
+    assert set(DELIVERY_SLOT) == set(CHANNELS)
+
+    envelope_slots = {
+        prompts.CHANNEL_SCANNER_MESSAGE,
+        prompts.CHANNEL_CODE_CONTEXT,
+        prompts.CHANNEL_PR_TITLE,
+        prompts.CHANNEL_TICKET_TEXT,
+    }
+    mapped = {slot for slot in DELIVERY_SLOT.values() if slot is not None}
+    assert mapped <= envelope_slots, f"payloads target unknown slots: {mapped - envelope_slots}"
+
+    # Every envelope slot is either covered by payloads or explicitly named as
+    # uncovered. A slot that is silently untested is an untested attack surface.
+    assert mapped | set(UNCOVERED_DELIVERY_SLOTS) == envelope_slots
+
+    # The hardened config gives repo_claude_md no delivery slot at all. That is the
+    # whole point of TODO 1: it cannot be pooled with channels that were reachable.
+    assert DELIVERY_SLOT["repo_claude_md"] is None

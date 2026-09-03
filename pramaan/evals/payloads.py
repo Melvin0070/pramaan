@@ -588,3 +588,37 @@ def _validate() -> None:
 
 
 _validate()
+
+
+# --------------------------------------------------------------------------- #
+# Reconciling the two taxonomies
+# --------------------------------------------------------------------------- #
+#
+# Two different things were both called "channel", which would have put two
+# vocabularies in one report:
+#
+#   * `pramaan.agent.prompts` names the *delivery slot* in the untrusted-data
+#     envelope -- where text is placed in the user turn.
+#   * This module names the *attack channel being measured*, per TODO 1.
+#
+# They are not the same list and should not be forced into one. A code-comment
+# injection is delivered through the `code_context` slot because that is how code
+# comments reach the model; a hostile `CLAUDE.md` has no delivery slot at all under
+# the hardened config, which is precisely the finding TODO 1 asks to be reported
+# rather than averaged away.
+
+DELIVERY_SLOT: dict[Channel, str | None] = {
+    "code_comment": "code_context",
+    "semgrep_message": "scanner_message",
+    "pr_title": "pr_title",
+    # Not delivered under the hardened config: setting_sources=[] means the file is
+    # never read, so there is no slot and no trial. Reported as "not delivered", never
+    # as a payload that failed -- counting it as a pass is what inflates a pooled ASR
+    # with attacks that were never possible.
+    "repo_claude_md": None,
+}
+
+#: Envelope slots that carry no payload in this corpus. `ticket_text` is a real
+#: untrusted channel the triage runner supports, but no payload targets it yet, so it
+#: is named here rather than silently absent.
+UNCOVERED_DELIVERY_SLOTS: tuple[str, ...] = ("ticket_text",)

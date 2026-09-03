@@ -81,3 +81,23 @@ and a future simplification would quietly break one.
 
 Worth recording that the freeze is what produced both findings: the lane was told to
 report rather than edit, so it reported instead of patching around them locally.
+
+**2026-09-03 — the eval lane found a hole in the policy gate, and reported it.**
+`calibration.tau` returns `1.0` when no threshold reaches the target precision — a
+sentinel meaning "no usable gate was derived". But `policy.engine.decide` gated on
+`confidence >= tau`, so a verdict claiming exactly 1.0 confidence would satisfy a gate
+that had never been derived and auto-close. Narrow, since `recommended_tau()` already
+raises unless 90% of folds achieve the target, but the failure mode is the worst kind:
+a model asserting total certainty is the least trustworthy input that function receives,
+not the most, and it would have been the one input that slipped through.
+
+Two lanes each held half the picture and neither could see it alone. It surfaced because
+the eval lane was told to report cross-lane problems rather than reach into `policy/` and
+patch them, and an existing policy test had pinned the buggy behaviour at `tau=1.0` —
+so a quiet fix would have looked like a test regression to whoever hit it next.
+
+Same session, same cause: the triage envelope and the payload corpus each defined a list
+called "channel" and the two lists were different. Both were right about different
+things — one names delivery slots, one names attack channels — so they are now mapped
+explicitly, with a test asserting every envelope slot is either covered by a payload or
+named as uncovered. A silently untested slot is an untested attack surface.

@@ -489,7 +489,10 @@ def test_d9_sensitivity_is_monotonic_under_decide():
 # tau is a parameter, never a literal
 # =========================================================================== #
 
-@pytest.mark.parametrize("tau", [0.0, 0.25, 0.5, 0.6, 0.75, 0.9, 0.99, 1.0])
+# 1.0 is excluded deliberately: it is the calibration layer's "no threshold reached
+# the target precision" sentinel, and is covered by
+# test_an_underived_tau_can_never_auto_close below.
+@pytest.mark.parametrize("tau", [0.0, 0.25, 0.5, 0.6, 0.75, 0.9, 0.99])
 def test_tau_alone_moves_the_auto_close_boundary(tau):
     """If the engine held a threshold of its own, the boundary would not track
     the parameter across this range."""
@@ -628,3 +631,20 @@ def test_decision_serialises_for_the_audit_log():
     assert isinstance(Decision(**{
         k: v for k, v in payload.items() if k != "invokes_fixer"
     }), Decision)
+
+
+def test_an_underived_tau_can_never_auto_close() -> None:
+    """tau == 1.0 means calibration found no usable threshold, not a strict one.
+
+    The calibration layer returns 1.0 when no threshold reached the target precision.
+    Gating on `confidence >= tau` would then let a verdict claiming exactly 1.0
+    confidence auto-close against a gate that was never derived -- and a model
+    asserting total certainty is the least trustworthy input here, not the most.
+    """
+    verdict = make_verdict(verdict="false_positive", confidence=1.0)
+
+    assert decide(verdict, CLEAN, tau=1.0).closes_automatically is False
+
+    # ...and the same verdict against a real derived gate still closes, so the guard
+    # is not simply disabling the auto-close path.
+    assert decide(verdict, CLEAN, tau=0.9).closes_automatically is True
