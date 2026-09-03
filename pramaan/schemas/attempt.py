@@ -28,6 +28,10 @@ ALL_ATTEMPT_STATUSES: tuple[str, ...] = (
 @dataclass(frozen=True, slots=True)
 class Attempt:
     finding_id: str
+    # The cache is keyed on fingerprint, not finding_id: a defect that shifts line
+    # numbers is the same defect. Carried here so an Attempt can derive its own
+    # cache key without the caller threading it separately.
+    fingerprint: str
     run_index: int
     status: AttemptStatus
     verdict: dict[str, Any] | None

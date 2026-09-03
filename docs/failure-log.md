@@ -34,3 +34,14 @@ fact rather than anything about the repo's actual state.
 The `pramaan/` directory existed but had no `__init__.py` files, so there was no package to
 discover. Fixed by adding the inits and an explicit `packages = ["pramaan"]`.
 Cost: two minutes and one timed-out install.
+
+**2026-09-03 — the frozen schema was wrong, and the store lane caught it.**
+`Attempt` carried six of the seven verdict-cache key fields but not `fingerprint`, so
+the cache could not derive its own key from an attempt; the store lane worked around it
+with `put(fingerprint, attempt)` and flagged it rather than quietly editing a file it
+had been told was frozen. Separately, the D13 row in the design doc listed a six-tuple
+while D19 and `CONTRACTS.md` listed seven — two documents disagreeing about the cache
+key, which is exactly the drift the `KEY_FIELDS` constant exists to prevent in code.
+Both fixed. Cost: nothing, because it was caught before three other lanes built on it —
+but it is the second time the freeze has been the thing that surfaced a defect rather
+than hidden one.

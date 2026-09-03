@@ -321,7 +321,7 @@ fix demo has exactly 3 candidates.
 | D10 | Attempt-level status enum: `valid \| schema_invalid \| truncated \| budget_abort \| refused`. All attempts logged. `schema_invalid` counts as a **non-match** in pass^k. Schema-failure rate published. |
 | D11 | **Full pytest coverage of the deterministic layer** (~60 tests), one case per act-vs-escalate row. Agent wrappers covered by evals, not units. |
 | D12 | **Paired injection run**: identical corpus against a deliberately unguarded, containerised, credential-free, egress-free control config and against the hardened config. Report both ASRs. Becomes demo step 3. |
-| D13 | **Content-addressed verdict store** keyed on (fingerprint, model, effort, context_config, prompt_hash, run_index), persisting D10 failure statuses. Verdict table published alongside the trust report. |
+| D13 | **Content-addressed verdict store** keyed on (fingerprint, model, effort, context_config, prompt_hash, run_index, run_epoch), persisting D10 failure statuses. The `run_epoch` term is required by D19 and was missing from this row as first written. Verdict table published alongside the trust report. |
 | D14 | **Tiered evals.** CI blocks on D11 unit tests plus a stratified cached subset. Full suite, ablation and paired injection run nightly via Batches, reported not blocking. |
 | D15 | Day-0 spike run before any build. **Executed — see above.** |
 | D16 | **Two corpora, reported separately, never blended**: 121 hand-labelled real PHP findings, and OWASP Benchmark v1.2 for CWE diversity (triage-only, no toolchain, free labels). Downstream: one CWE skill not four; weighted kappa on severity dropped as degenerate; fixer allowlist shrunk to XSS + SQLi; Juice Shop carries the full-proof funnel. |
