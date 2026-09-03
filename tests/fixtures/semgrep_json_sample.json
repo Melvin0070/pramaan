@@ -1,0 +1,97 @@
+{
+  "version": "1.45.0",
+  "results": [
+    {
+      "check_id": "php.lang.security.injection.tainted-sql-string",
+      "path": "app/models/User.php",
+      "start": {
+        "line": 42,
+        "col": 5,
+        "offset": 1204
+      },
+      "end": {
+        "line": 44,
+        "col": 61,
+        "offset": 1290
+      },
+      "extra": {
+        "message": "Tainted SQL string constructed from `$_GET['id']` and passed to `mysqli_query` without a prepared statement.",
+        "severity": "ERROR",
+        "metadata": {
+          "cwe": [
+            "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+          ],
+          "owasp": [
+            "A03:2021 - Injection"
+          ],
+          "category": "security",
+          "confidence": "HIGH",
+          "technology": ["php"],
+          "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
+        },
+        "lines": "$query = \"SELECT * FROM users WHERE id = \" . $_GET['id'];",
+        "fingerprint": "abcdef0123456789abcdef0123456789abcdef01",
+        "is_ignored": false
+      }
+    },
+    {
+      "check_id": "php.lang.security.audit.xss.direct-response-write",
+      "path": "app/views/render.php",
+      "start": {
+        "line": 10,
+        "col": 1,
+        "offset": 210
+      },
+      "end": {
+        "line": 10,
+        "col": 24,
+        "offset": 233
+      },
+      "extra": {
+        "message": "`$_POST['comment']` is echoed without htmlspecialchars().",
+        "severity": "WARNING",
+        "metadata": {
+          "cwe": "CWE-79",
+          "owasp": "A03:2021",
+          "category": "security",
+          "confidence": "MEDIUM"
+        },
+        "lines": "echo $_POST['comment'];",
+        "fingerprint": "1122334455667788990011223344556677889900",
+        "is_ignored": false
+      }
+    },
+    {
+      "check_id": "generic.secrets.security.detected-generic-api-key",
+      "path": "config/services.php",
+      "start": {
+        "line": 3,
+        "col": 1,
+        "offset": 20
+      },
+      "end": {
+        "line": 3,
+        "col": 45,
+        "offset": 64
+      },
+      "extra": {
+        "message": "A generic API key was detected in source.",
+        "severity": "INFO",
+        "metadata": {
+          "category": "security",
+          "confidence": "LOW"
+        },
+        "fingerprint": "99887766554433221100998877665544332211aa",
+        "is_ignored": false
+      }
+    }
+  ],
+  "errors": [],
+  "paths": {
+    "scanned": [
+      "app/models/User.php",
+      "app/views/render.php",
+      "config/services.php"
+    ]
+  }
+}
